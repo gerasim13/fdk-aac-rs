@@ -109,6 +109,7 @@ fn check(e: sys::AACENC_ERROR) -> Result<(), DecoderError> {
 #[derive(Debug)]
 pub struct Decoder {
     handle: sys::HANDLE_AACDECODER,
+    reset_pending: bool,
 }
 
 unsafe impl Send for Decoder {}
@@ -125,7 +126,7 @@ impl Decoder {
             }
         };
 
-        Decoder { handle }
+        Decoder { handle, reset_pending: false }
     }
 
     pub fn config_raw(&mut self, audio_specic_config: &[u8]) -> Result<(), DecoderError> {
@@ -168,12 +169,29 @@ impl Decoder {
     }
 
     pub fn decode_frame(&mut self, pcm: &mut [i16]) -> Result<(), DecoderError> {
+        let flags = if self.reset_pending {
+            sys::AACDEC_INTR | sys::AACDEC_CLRHIST
+        } else {
+            0
+        };
         unsafe {
             check(sys::aacDecoder_DecodeFrame(self.handle,
                 pcm.as_mut_ptr() as *mut i16,
                 pcm.len() as c_int,
-                0))
+                flags))?;
         }
+        self.reset_pending = false;
+        Ok(())
+    }
+
+    /// Discard buffered input and clear signal history on the next decoded frame.
+    pub fn reset(&mut self) -> Result<(), DecoderError> {
+        unsafe {
+            check(sys::aacDecoder_SetParam(self.handle,
+                sys::AACDEC_PARAM_AAC_TPDEC_CLEAR_BUFFER, 1))?;
+        }
+        self.reset_pending = true;
+        Ok(())
     }
 
     pub fn decoded_frame_size(&self) -> usize {
